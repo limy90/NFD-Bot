@@ -1,7 +1,7 @@
  [原帖](https://www.nodeseek.com/post-29975-1)  [项目地址](https://github.com/LloydAsp/nfd)
 
  [魔改版](https://www.nodeseek.com/post-122678-1)  [项目地址](https://github.com/small-haozi/worker-SXbot.js)
-需要添加一个 kv 空间名字为：FRAUD_LIST，并绑定到 workers
+
 
 ## 搭建方法
 1. 从[@BotFather](https://t.me/BotFather)获取token，并且可以发送`/setjoingroups`来禁止此Bot被添加到群组
@@ -12,9 +12,10 @@
     - 增加一个`ENV_BOT_TOKEN`变量，数值为从步骤1中获得的token
     - 增加一个`ENV_BOT_SECRET`变量，数值为从步骤2中获得的secret
     - 增加一个`ENV_ADMIN_UID`变量，数值为从步骤3中获得的用户id
-6. 绑定kv数据库，创建一个Namespace Name为`nfd`的kv数据库，在setting -> variable中设置`KV Namespace Bindings`：nfd -> nfd
-7. 点击`Quick Edit`，复制worker.js到编辑器中
-8. 通过打开`https://xxx.workers.dev/registerWebhook`来注册websoket
+6. 绑定kv数据库，创建一个`nfd`的kv数据库，在setting -> variable中设置`KV Namespace Bindings`：nfd -> nfd
+7. 魔改版需要额外添加一个 kv 空间名字为：FRAUD_LIST，并绑定到 workers
+8. 点击`Quick Edit`，复制worker.js到编辑器中
+9. 通过打开`https://xxx.workers.dev/registerWebhook`来注册websoket
 
 ## 使用方法
 - 当其他用户给bot发消息，会被转发到bot创建者
