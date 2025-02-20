@@ -61,9 +61,23 @@ if [ $retry_counter -eq $max_retries ]; then
     exit 1
 fi
 
-# 获取升级信息（修正转义符问题）
-BEFORE_UPGRADE=$(apt list --upgradable 2>/dev/null | grep -c upgradable)
-UPGRADE_INFO=$(apt-get -s dist-upgrade | awk '/^Inst/ {print \$2}')  # 移除非法的转义符
+# 获取升级信息（最佳实践方案）
+get_upgrade_info() {
+    # 强制使用英语环境
+    local lang_backup="$LANG"
+    export LANG=C
+    
+    # 使用apt原生输出
+    local upgrade_list=$(apt list --upgradable 2>/dev/null)
+    BEFORE_UPGRADE=$(echo "$upgrade_list" | grep -c upgradable)
+    UPGRADE_INFO=$(echo "$upgrade_list" | awk -F/ '/upgradable/ {print \$1}')
+    
+    # 恢复语言设置
+    export LANG="$lang_backup"
+}
+
+# 调用函数
+get_upgrade_info
 
 # 无可用更新处理
 if [ -z "$UPGRADE_INFO" ] || [ "$BEFORE_UPGRADE" -eq 0 ]; then
