@@ -43,10 +43,20 @@ status_msg() {
 show_process_tree() {
     local pid=\$1
     if command -v pstree >/dev/null 2>&1; then
-        echo -e "进程树: $(pstree -s -p $pid)"
+        echo -e "进程树: $(pstree -s -p $pid 2>/dev/null || echo '无法显示')"
     else
-        echo -e "父进程: $(ps -o ppid= -p $pid | xargs ps -o cmd= -p)"
-        echo -e "命令行: $(ps -p $pid -o cmd=)"
+        # 获取父进程信息（处理空值和无效PID）
+        local ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | awk '{print \$1}')
+        if [ -n "$ppid" ] && [ "$ppid" -ne 0 ] 2>/dev/null; then
+            local parent_cmd=$(ps -o cmd= -p "$ppid" 2>/dev/null || echo '未知')
+            echo -e "父进程[$ppid]: $parent_cmd"
+        else
+            echo -e "父进程: 无"
+        fi
+
+        # 获取当前进程命令行
+        local current_cmd=$(ps -p "$pid" -o cmd= --no-headers 2>/dev/null || echo '无法获取')
+        echo -e "命令行: $current_cmd"
         echo -e "提示: 安装 ${YELLOW}psmisc${NC} 包可查看完整进程树 (sudo apt install psmisc)"
     fi
 }
@@ -62,9 +72,14 @@ check_dpkg_lock() {
             # 检测实际占用进程
             if lsof -t "$lock_file" >/dev/null; then
                 locked=1
-                local pid=$(lsof -t "$lock_file" | head -1)
+                local pids=($(lsof -t "$lock_file"))
+                local pid=${pids[0]}  # 取第一个PID
+                if [ -z "$pid" ]; then
+                    status_msg warn "检测到锁占用，但无法获取进程ID"
+                    continue
+                fi
                 status_msg warn "检测到锁占用：$lock_file"
-                status_msg info "占用进程：$(ps -p $pid -o cmd=)"
+                status_msg info "占用进程PID: $pid"
                 show_process_tree "$pid"
                 # 尝试修复未完成的dpkg配置
                 if pgrep -x "dpkg" >/dev/null; then
@@ -110,7 +125,7 @@ retry_command() {
         sleep $((attempt * 5))
         ((attempt++))
     done
-        status_msg error "命令重试次数耗尽：$cmd"
+    status_msg error "命令重试次数耗尽：$cmd"
     return 1
 }
 
