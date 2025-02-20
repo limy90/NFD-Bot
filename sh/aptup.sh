@@ -1,64 +1,104 @@
 #!/bin/bash
 
-# 获取升级信息（优化版）
-get_upgrade_info() {
-    local lang_backup="$LANG"
-    export LANG=C
-    
-    local upgrade_list=$(apt list --upgradable 2>/dev/null)
-    BEFORE_UPGRADE=$(echo "$upgrade_list" | grep -c upgradable)
-    UPGRADE_INFO=$(echo "$upgrade_list" | grep 'upgradable' | cut -d/ -f1)  # 修改点1
-    
-    export LANG="$lang_backup"
+# 定义带时间戳的日志文件
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
+LOG_FILE="/var/log/upgrade_${TIMESTAMP}.log"
+REPORT_FILE="/var/log/upgrade_report_${TIMESTAMP}.txt"
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # 无颜色
+
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo -e "${RED}错误：本脚本需要root权限执行${NC}" | tee -a "$LOG_FILE"
+    exit 1
+fi
+
+# 函数：错误处理
+handle_error() {
+    echo -e "${RED}错误发生在第 \$1 行，退出码：\$2${NC}" | tee -a "$LOG_FILE"
+    echo -e "${YELLOW}尝试使用 dist-upgrade 修复...${NC}" | tee -a "$LOG_FILE"
+    apt-get dist-upgrade -y >> "$LOG_FILE" 2>&1
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}修复失败，请检查日志文件：$LOG_FILE${NC}" | tee -a "$LOG_FILE"
+        exit 1
+    fi
 }
 
-# 显示更新摘要
-echo -e "\n${GREEN}[$(get_timestamp)] 检测到以下更新：${NC}"
-apt list --upgradable 2>/dev/null | tail -n +2 | cut -d/ -f1  # 修改点2
+# 记录所有输出到日志文件
+exec > >(tee -a "$LOG_FILE")
+exec 2>&1
 
-# ...（中间部分保持不变）...
+# 创建系统备份（可选）
+echo -e "${YELLOW}创建重要配置文件备份...${NC}"
+mkdir -p /var/backup/upgrade_$TIMESTAMP
+cp -r /etc/apt/sources.list* /var/backup/upgrade_$TIMESTAMP/
+dpkg --get-selections > /var/backup/upgrade_$TIMESTAMP/pkg_selections.list
 
-# 生成报告
+# 获取升级前包列表
+echo -e "${YELLOW}获取当前软件包状态...${NC}"
+apt list --upgradable > /tmp/before_upgrade.list 2>/dev/null
+
+# 执行系统更新
+echo -e "${YELLOW}正在更新软件包列表...${NC}"
+apt-get update
+if [ $? -ne 0 ]; then
+    handle_error "$LINENO" "$?"
+fi
+
+# 执行升级（带错误处理）
+echo -e "${YELLOW}正在升级软件包...${NC}"
+trap 'handle_error $LINENO $?' ERR
+apt-get upgrade -y
+trap - ERR
+
+# 执行 dist-upgrade
+echo -e "${YELLOW}执行深度升级...${NC}"
+apt-get dist-upgrade -y
+
+# 生成升级报告
+echo -e "${YELLOW}生成升级报告...${NC}"
 {
-    echo -e "\n===== 升级报告 ====="
-    echo "成功升级包数: $SUCCESS"
-    echo "失败操作数: $FAILED"
-    echo "清理旧内核结果: $([ $cleanup_result -eq 0 ] && echo "成功" || echo "失败")"
-    
-    # 修改点3：磁盘空间报告
-    df_line=$(df -h / | tail -n1 | tr -s ' ')
-    available=$(echo "$df_line" | cut -d ' ' -f4)
-    used_pct=$(echo "$df_line" | cut -d ' ' -f5)
-    echo "磁盘空间变化: 可用:$available 使用率:$used_pct"
-    
-    # 修改点4：系统负载
-    echo "系统负载: $(uptime | sed 's/.*load average: //')"
-} | tee -a "$LOG_FILE"
+    echo "系统升级报告 - $(date)"
+    echo "--------------------------------"
+    echo "升级的软件包列表："
+    diff /tmp/before_upgrade.list <(apt list --upgradable 2>/dev/null) | grep '>' | cut -d' ' -f2
+    echo -e "\n需要重启的服务："
+    checkrestart -v 2>/dev/null || needrestart -b 2>/dev/null || echo "无法检测，请手动运行 checkrestart"
+    echo -e "\n磁盘空间变化："
+    df -h | grep -v tmpfs
+} > "$REPORT_FILE"
 
-# 服务重启检查（修改点5）
-if command -v needrestart &> /dev/null; then
-    echo -e "\n${BLUE}[$(get_timestamp)] 检查需要重启的服务...${NC}"
-    RESTART_SERVICES=$(needrestart -b 2>/dev/null | sed -n '/服务需要重启/{:a;n;/^$/q;p;ba}')
-    # ...后续不变...
+# 检查需要重启的服务
+echo -e "${YELLOW}检查系统状态...${NC}"
+NEED_REBOOT=0
+if [ -f "/var/run/reboot-required" ]; then
+    echo -e "${RED}系统需要重启！${NC}" | tee -a "$REPORT_FILE"
+    NEED_REBOOT=1
 fi
 
-# ...（剩余部分保持不变）...
+# 清理旧包
+echo -e "${YELLOW}清理不需要的软件包...${NC}"
+apt-get autoremove -y
+apt-get autoclean
 
-# 删除处理
-read -p "[$(get_timestamp)] 是否删除脚本和日志？(Y/n) " DELETE
-if [[ "$DELETE" =~ ^[Yy]$ ]]; then
-    echo -e "\n${BLUE}[$(get_timestamp)] 删除脚本和日志..."
-    rm -f "$SCRIPT_PATH" && echo -e "${GREEN}脚本已删除。${NC}"
-    rm -f "$LOG_FILE" && echo -e "${GREEN}日志已删除。${NC}"
-else
-    echo -e "\n${BLUE}[$(get_timestamp)] 脚本保留在: $SCRIPT_PATH"
-    echo -e "完整日志路径: $LOG_FILE${NC}"
+# 完成提示
+echo -e "${GREEN}升级完成！${NC}"
+echo -e "日志文件：$LOG_FILE"
+echo -e "详细报告：$REPORT_FILE"
+
+# 用户交互
+read -p "是否要删除本脚本和日志文件？[y/N] " -n 1 -r
+echo
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo "删除脚本和日志..."
+    rm -f "\$0" "$LOG_FILE" "$REPORT_FILE"
 fi
 
-# 最终系统状态
-echo -e "\n${GREEN}[$(get_timestamp)] 升级完成！建议执行：${NC}"
-echo -e "1. 检查服务状态: systemctl list-units --type=service --state=failed"
-echo -e "2. 查看最近更新: grep ' upgraded' $LOG_FILE"
-echo -e "3. 系统重启建议: [ $(uptime -p | grep -q day && echo "建议安排重启") ]"
-
-exit 0
+# 重启提示
+if [ $NEED_REBOOT -eq 1 ]; then
+    echo -e "${RED}建议立即重启系统！执行：sudo reboot${NC}"
+fi
