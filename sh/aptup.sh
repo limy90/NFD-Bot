@@ -56,9 +56,9 @@ progress_handler() {
         # 终端显示处理
         case "$line" in
             *Unpacking*)
-                status_msg proc "解包: $(awk '{print \$2}' <<< "$line")" ;;
+                status_msg proc "解包: $(echo "$line" | awk '{print \$2}')" ;;
             *Setting\ up*)
-                status_msg success "安装: $(awk '{print \$3}' <<< "$line")"
+                status_msg success "安装: $(echo "$line" | awk '{print \$3}')"
                 ((count++)) ;;
             *ERROR*|*E:*|*错误*)
                 status_msg error "${line#*: }" ;;
@@ -80,8 +80,8 @@ compare_versions() {
     status_msg info "生成版本变更报告..."
     dpkg -l | awk '/^ii/ {print \$2"="\$3}' > /tmp/versions_after
     echo -e "\n${GREEN}=== 版本变更明细 ===${NC}"
-    diff --color=always /tmp/versions_{before,after} | grep '>' | sed 's/> //'
-    rm /tmp/versions_{before,after}
+    diff --color=always /tmp/versions_before /tmp/versions_after | grep '>' | sed 's/> //'
+    rm /tmp/versions_before /tmp/versions_after
 }
 
 # ================== 主流程 ==================
@@ -98,7 +98,7 @@ record_versions
 # 检查可升级包
 status_msg info "检查可升级软件包..."
 UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "^Listing")
-UPGRADABLE_COUNT=$(wc -l <<< "$UPGRADABLE")
+UPGRADABLE_COUNT=$(echo "$UPGRADABLE" | wc -l)
 
 if [ $UPGRADABLE_COUNT -eq 0 ]; then
     status_msg success "没有可升级软件包"
@@ -107,7 +107,7 @@ fi
 
 # 显示可升级列表
 echo -e "\n${CYAN}可升级软件包列表：${NC}"
-awk -F/ '{print "  " \$1}' <<< "$UPGRADABLE"
+echo "$UPGRADABLE" | awk -F/ '{print "  " \$1}'
 echo -e "${YELLOW}总计: ${UPGRADABLE_COUNT} 个软件包${NC}"
 
 # 用户确认
