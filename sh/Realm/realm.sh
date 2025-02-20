@@ -142,7 +142,7 @@ confirm(){
 
 install_realm(){
 	echo "安装realm..."
- 	download /tmp/realm-x86_64-unknown-linux-gnu.tar.gz https://github.com/zhboner/realm/releases/download/${_version}/realm-x86_64-unknown-linux-gnu.tar.gz
+ 	download /tmp/realm-x86_64-unknown-linux-gnu.tar.gz https://github.com/zhboner/realm/releases/download/v2.7.0/realm-x86_64-unknown-linux-gnu.tar.gz
  	tar -zxvf /tmp/realm-x86_64-unknown-linux-gnu.tar.gz -C /usr/bin/ > /dev/null 2>&1
   	[ ! -f /usr/bin/realm ] && echo -e "[${red}Error${plain}] realm可执行文件不存在" && exit 1
         chown root:root /usr/bin/realm && chmod +x /usr/bin/realm
