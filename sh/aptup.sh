@@ -66,6 +66,11 @@ check_dpkg_lock() {
                 status_msg warn "检测到锁占用：$lock_file"
                 status_msg info "占用进程：$(ps -p $pid -o cmd=)"
                 show_process_tree "$pid"
+                # 尝试修复未完成的dpkg配置
+                if pgrep -x "dpkg" >/dev/null; then
+                    status_msg info "尝试修复未完成的dpkg配置..."
+                    sudo dpkg --configure -a
+                fi
             elif [ -e "$lock_file" ]; then
                 status_msg warn "发现残留锁文件：$lock_file"
                 if rm -f "$lock_file" 2>/dev/null; then
@@ -80,7 +85,7 @@ check_dpkg_lock() {
         # 超时处理
         if [ $(($(date +%s) - start_time)) -gt $LOCK_TIMEOUT ]; then
             status_msg error "等待锁超时（${LOCK_TIMEOUT}秒）"
-            echo -e "${YELLOW}建议操作：\n1. 检查进程：ps -ef | grep apt\n2. 强制解锁：sudo rm ${LOCK_FILES[@]}\n3. 重启系统${NC}" | tee -a "$LOG_FILE"
+            echo -e "${YELLOW}建议操作：\n1. 运行修复命令：sudo dpkg --configure -a\n2. 终止占用进程：sudo kill -9 $(lsof -t /var/lib/dpkg/lock-frontend)\n3. 删除锁文件：sudo rm ${LOCK_FILES[@]}\n4. 重启系统${NC}" | tee -a "$LOG_FILE"
             exit 1
         fi
 
@@ -105,7 +110,7 @@ retry_command() {
         sleep $((attempt * 5))
         ((attempt++))
     done
-    status_msg error "命令重试次数耗尽：$cmd"
+        status_msg error "命令重试次数耗尽：$cmd"
     return 1
 }
 
