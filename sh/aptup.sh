@@ -39,26 +39,21 @@ status_msg() {
     esac | tee -a "$LOG_FILE"
 }
 
-# 显示进程树（兼容无pstree环境）
-show_process_tree() {
+# 显示进程信息（仅使用 ps）
+show_process_info() {
     local pid=\$1
-    if command -v pstree >/dev/null 2>&1; then
-        echo -e "进程树: $(pstree -s -p $pid 2>/dev/null || echo '无法显示')"
+    # 获取父进程信息（处理空值和无效PID）
+    local ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | awk '{print \$1}')
+    if [ -n "$ppid" ] && [ "$ppid" -ne 0 ] 2>/dev/null; then
+        local parent_cmd=$(ps -o cmd= -p "$ppid" 2>/dev/null || echo '未知')
+        echo -e "父进程[$ppid]: $parent_cmd"
     else
-        # 获取父进程信息（处理空值和无效PID）
-        local ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | awk '{print \$1}')
-        if [ -n "$ppid" ] && [ "$ppid" -ne 0 ] 2>/dev/null; then
-            local parent_cmd=$(ps -o cmd= -p "$ppid" 2>/dev/null || echo '未知')
-            echo -e "父进程[$ppid]: $parent_cmd"
-        else
-            echo -e "父进程: 无"
-        fi
-
-        # 获取当前进程命令行
-        local current_cmd=$(ps -p "$pid" -o cmd= --no-headers 2>/dev/null || echo '无法获取')
-        echo -e "命令行: $current_cmd"
-        echo -e "提示: 安装 ${YELLOW}psmisc${NC} 包可查看完整进程树 (sudo apt install psmisc)"
+        echo -e "父进程: 无"
     fi
+
+    # 获取当前进程命令行
+    local current_cmd=$(ps -p "$pid" -o cmd= --no-headers 2>/dev/null || echo '无法获取')
+    echo -e "命令行: $current_cmd"
 }
 
 # 智能锁检测与处理
@@ -80,7 +75,7 @@ check_dpkg_lock() {
                 fi
                 status_msg warn "检测到锁占用：$lock_file"
                 status_msg info "占用进程PID: $pid"
-                show_process_tree "$pid"
+                show_process_info "$pid"
                 # 尝试修复未完成的dpkg配置
                 if pgrep -x "dpkg" >/dev/null; then
                     status_msg info "尝试修复未完成的dpkg配置..."
@@ -241,7 +236,7 @@ compare_versions
 echo -e "\n${GREEN}=== 操作摘要 ==="
 echo -e "成功升级包数: ${SUCCESS_COUNT} 个"
 echo -e "遇到错误次数:    ${FAIL_COUNT} 次"
-echo -e "日志文件位置:    ${LOG_FILE}${NC}"
+echo -e "日志文件位置:    ${LOG_FILE}${NC}
 
 # 重启提示
 if [ -f "/var/run/reboot-required" ]; then
