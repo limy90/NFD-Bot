@@ -1,175 +1,80 @@
 #!/bin/bash
 
-# ================== 全局配置 ==================
-ROOT_DIR="/root"
-SCRIPT_NAME="aptup.sh"
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
-LOG_FILE="${ROOT_DIR}/upgrade_${TIMESTAMP}.log"
-RETRY_COUNT=3          # 命令重试次数
+# 定义日志文件和版本文件
+LOG_FILE="upgrade_log.txt"
+PRE_VERSIONS="pre_versions.txt"
+POST_VERSIONS="post_versions.txt"
+CURRENT_SCRIPT="$(basename "\$0")"
 
-# ================== 颜色定义 ==================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-CYAN='\033[0;36m'
-BLUE='\033[0;34m'
-NC='\033[0m' # 无颜色
+# 检查root权限
+if [ "$EUID" -ne 0 ]; then
+    echo "请以root用户权限运行此脚本"
+    exit 1
+fi
 
-# ================== 初始化部分 ==================
-SUCCESS_COUNT=0
-FAIL_COUNT=0
-declare -A PACKAGE_VERSIONS
-
-# ================== 函数定义 ==================
-
-# 带颜色和图标的状态显示
-status_msg() {
-    case \$1 in
-        info)    echo -e "${BLUE}ℹ \$2${NC}" ;;
-        success) echo -e "${GREEN}✓ \$2${NC}" ;;
-        warn)    echo -e "${YELLOW}⚠ \$2${NC}" ;;
-        error)   echo -e "${RED}✖ \$2${NC}" ;;
-        proc)    echo -e "${CYAN}» \$2${NC}" ;;
-    esac | tee -a "$LOG_FILE"
+# 自动清理函数
+auto_clean() {
+    # 静默删除所有相关文件
+    rm -f "$LOG_FILE" "$PRE_VERSIONS" "$POST_VERSIONS" "$CURRENT_SCRIPT" 2>/dev/null
+    exit ${1:-0}  # 默认正常退出
 }
 
-# 带重试的命令执行
-retry_command() {
-    local cmd=$*
-    local attempt=1
-    while [ $attempt -le $RETRY_COUNT ]; do
-        status_msg info "尝试执行 ($attempt/$RETRY_COUNT): ${cmd%% *}"
-        if eval "$cmd"; then
-            return 0
-        fi
-        sleep $((attempt * 5))
-        ((attempt++))
-    done
-    status_msg error "命令重试次数耗尽：$cmd"
-    return 1
-}
-
-# 实时进度处理器
-progress_handler() {
-    local count=0
-    while IFS= read -r line; do
-        # 终端显示处理
-        case "$line" in
-            *Unpacking*)
-                status_msg proc "解包: $(echo "$line" | awk '{print \$2}')" ;;
-            *Setting\ up*)
-                status_msg success "安装: $(echo "$line" | awk '{print \$3}')"
-                ((count++)) ;;
-            *ERROR*|*E:*|*错误*)
-                status_msg error "${line#*: }" ;;
-            *http*|*Hit*|*Ign*)
-                status_msg info "$line" ;;
-        esac
-        echo "$line"  # 原始日志
-    done
-    echo $count
-}
-
-# 版本记录与比较
+# 记录版本信息（使用sed+cut替代awk）
 record_versions() {
-    status_msg info "记录当前软件版本..."
-    dpkg -l | awk '/^ii/ {print \$2"="\$3}' > /tmp/versions_before
+    dpkg -l | sed -n '/^ii/s/  */ /gp' | cut -d ' ' -f2,3 > "\$1" || return 1
 }
 
-compare_versions() {
-    status_msg info "生成版本变更报告..."
-    dpkg -l | awk '/^ii/ {print \$2"="\$3}' > /tmp/versions_after
-    echo -e "\n${GREEN}=== 版本变更明细 ===${NC}"
-    diff --color=always /tmp/versions_before /tmp/versions_after | grep '>' | sed 's/> //'
-    rm /tmp/versions_before /tmp/versions_after
+# 版本对比函数（带文件存在性检查）
+show_changes() {
+    [ ! -f "$POST_VERSIONS" ] && return 1
+    echo -e "\n版本变化对比："
+    while IFS= read -r line; do
+        pkg="${line%% *}"
+        old_ver=$(grep "^$pkg " "$PRE_VERSIONS" 2>/dev/null | cut -d ' ' -f2)
+        new_ver=$(cut -d ' ' -f2 <<< "$line")
+        [ -n "$old_ver" ] && [ "$old_ver" != "$new_ver" ] && \
+        printf "%-25s %-15s → %s\n" "$pkg" "$old_ver" "$new_ver"
+    done < "$POST_VERSIONS"
 }
 
-# ================== 主流程 ==================
-[ "$EUID" -ne 0 ] && { status_msg error "需要root权限执行"; exit 1; }
+# 主流程
+trap 'auto_clean 1' ERR  # 捕获错误时自动清理
 
-# 初始化日志
-exec > >(tee -a "$LOG_FILE")
-exec 2>&1
-status_msg info "启动系统更新 (日志文件: $LOG_FILE)"
-
-# 版本快照
-record_versions
-
-# 检查可升级包
-status_msg info "检查可升级软件包..."
-UPGRADABLE=$(apt list --upgradable 2>/dev/null | grep -v "^Listing")
-UPGRADABLE_COUNT=$(echo "$UPGRADABLE" | wc -l)
-
-if [ $UPGRADABLE_COUNT -eq 0 ]; then
-    status_msg success "没有可升级软件包"
-    exit 0
-fi
-
-# 显示可升级列表
-echo -e "\n${CYAN}可升级软件包列表：${NC}"
-echo "$UPGRADABLE" | awk -F/ '{print "  " \$1}'
-echo -e "${YELLOW}总计: ${UPGRADABLE_COUNT} 个软件包${NC}"
-
-# 用户确认
-read -p "是否继续升级？[Y/n] " -n 1 -r
-echo
-[[ $REPLY =~ ^[Nn]$ ]] && exit 0
-
-# 执行升级流程
-{
-    # 阶段1：更新索引
-    status_msg info "阶段1/3 - 更新软件包列表"
-    retry_command "apt-get update" || FAIL_COUNT=$((FAIL_COUNT+1))
-
-    # 阶段2：执行升级
-    perform_upgrade() {
-        status_msg info "阶段2/3 - 执行 \$1 升级"
-        local output=$(mktemp)
-        
-        # 执行升级命令
-        { apt-get "\$1" -y 2>&1 | progress_handler > "$output"; } 2>&1
-        
-        # 处理结果
-        local exit_code=${PIPESTATUS[0]}
-        local upgraded=$(grep -c '^✓ 安装:' "$output")
-        
-        cat "$output" | tee -a "$LOG_FILE"
-        rm "$output"
-        
-        if [ $exit_code -eq 0 ]; then
-            SUCCESS_COUNT=$((SUCCESS_COUNT + upgraded))
-        else
-            FAIL_COUNT=$((FAIL_COUNT + 1))
-        fi
-    }
-
-    perform_upgrade upgrade
-    perform_upgrade dist-upgrade
-
-    # 阶段3：清理
-    status_msg info "阶段3/3 - 系统清理"
-    retry_command "apt-get autoremove -y" && \
-    retry_command "apt-get autoclean" || \
-    FAIL_COUNT=$((FAIL_COUNT + 1))
+# 记录升级前版本
+record_versions "$PRE_VERSIONS" || {
+    echo "无法记录初始版本信息"
+    auto_clean 1
 }
 
-# 生成报告
-compare_versions
-echo -e "\n${GREEN}=== 操作摘要 ==="
-echo -e "成功升级包数: ${SUCCESS_COUNT} 个"
-echo -e "遇到错误次数:    ${FAIL_COUNT} 次"
-echo -e "日志文件位置:    ${LOG_FILE}${NC}"
-
-# 重启提示
-if [ -f "/var/run/reboot-required" ]; then
-    status_msg warn "系统需要重启！执行命令: sudo reboot"
+# 更新包列表
+if ! apt-get update &>> "$LOG_FILE"; then
+    echo "更新失败，查看日志: $LOG_FILE"
+    auto_clean 1
 fi
 
-# 脚本自清理
-if [ -z "\$1" ]; then
-    read -p "是否删除本脚本？[y/N] " -n 1 -r
-    echo
-    [[ $REPLY =~ ^[Yy]$ ]] && rm -- "\$0"
+# 获取可升级包列表
+UPGRADE_LIST=$(apt-get upgrade -s | grep '^Inst' | cut -d ' ' -f2 | tr '\n' ' ')
+if [ -z "$UPGRADE_LIST" ]; then
+    echo "系统已是最新状态，无可用更新"
+    auto_clean 0  # 静默清理退出
 fi
 
+# 执行升级操作
+if ! apt-get dist-upgrade -y &>> "$LOG_FILE"; then
+    echo "升级出错，查看日志: $LOG_FILE"
+    auto_clean 1
+fi
+
+# 记录升级后版本
+record_versions "$POST_VERSIONS" || {
+    echo "无法记录升级后版本信息"
+    auto_clean 1
+}
+
+# 显示版本对比
+show_changes || echo "未发现版本变化"
+
+# 最终清理（保留日志文件）
+rm -f "$PRE_VERSIONS" "$POST_VERSIONS" 2>/dev/null
+echo "操作完成，日志文件保留在: $LOG_FILE"
 exit 0
