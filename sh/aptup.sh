@@ -39,6 +39,18 @@ status_msg() {
     esac | tee -a "$LOG_FILE"
 }
 
+# 显示进程树（兼容无pstree环境）
+show_process_tree() {
+    local pid=\$1
+    if command -v pstree >/dev/null 2>&1; then
+        echo -e "进程树: $(pstree -s -p $pid)"
+    else
+        echo -e "父进程: $(ps -o ppid= -p $pid | xargs ps -o cmd= -p)"
+        echo -e "命令行: $(ps -p $pid -o cmd=)"
+        echo -e "提示: 安装 ${YELLOW}psmisc${NC} 包可查看完整进程树 (sudo apt install psmisc)"
+    fi
+}
+
 # 智能锁检测与处理
 check_dpkg_lock() {
     local start_time=$(date +%s)
@@ -53,7 +65,7 @@ check_dpkg_lock() {
                 local pid=$(lsof -t "$lock_file" | head -1)
                 status_msg warn "检测到锁占用：$lock_file"
                 status_msg info "占用进程：$(ps -p $pid -o cmd=)"
-                status_msg info "进程树：$(pstree -s -p $pid)"
+                show_process_tree "$pid"
             elif [ -e "$lock_file" ]; then
                 status_msg warn "发现残留锁文件：$lock_file"
                 if rm -f "$lock_file" 2>/dev/null; then
@@ -219,6 +231,7 @@ fi
 # 脚本自清理
 if [ -z "\$1" ]; then
     read -p "是否删除本脚本？[y/N] " -n 1 -r
+    echo
     [[ $REPLY =~ ^[Yy]$ ]] && rm -- "\$0"
 fi
 
