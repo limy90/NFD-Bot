@@ -32,6 +32,8 @@ UPGRADABLE_COUNT=$(apt list --upgradable 2>/dev/null | grep -v "^Listing" | wc -
 
 if [ $UPGRADABLE_COUNT -eq 0 ]; then
     echo -e "${GREEN}没有需要升级的软件包${NC}"
+    echo "正在删除脚本和日志..."
+    rm -f "${ROOT_DIR}/${SCRIPT_NAME}" "$LOG_FILE"
     exit 0
 fi
 
