@@ -1,90 +1,107 @@
 #!/bin/bash
 
-# ---------- 配置区 ----------
-LOG_FILE="/var/log/upgrade_$(date +%Y%m%d%H%M).log"  # 带时间戳的日志路径
-UPGRADE_MODE="upgrade"  # 可选 upgrade/dist-upgrade
-USE_APT="yes"           # 使用 apt 替代 apt-get（更友好进度条）
-# ---------------------------
+# 定义日志文件和时间戳
+LOG_FILE="upgrade_log_$(date +%Y%m%d%H%M).txt"
+TimeStamp=$(date +%Y-%m-%d_%H:%M:%S)
 
-# 检查 root 权限
+# 添加颜色输出以提高可读性
+RED='\033[031m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34'
+NC='\033[0m'
+
+# 检查是否以root用户运行
+echo -e "\n${BLUE}[$TimeStamp] 检查权限...${NC}"
 if [ "$EUID" -ne 0 ]; then
-    echo -e "\033[31m错误：请以 root 权限运行此脚本\033[0m" >&2
+    echo -e "${RED}错误：请以root用户权限运行此脚本！${NC}"
     exit 1
 fi
 
-# 记录日志函数
-log() {
-    echo "[$(date +'%Y-%m-%d %H:%M:%S')] \$1" | tee -a "$LOG_FILE"
-}
+# 创建日志文件并写入初始信息
+echo -e "[$TimeStamp] 脚本开始执行。" > "$LOG_FILE"
+echo -e "[$TimeStamp] 使用的LOG_FILE: $LOG_FILE" >> "$LOG_FILE"
 
-# 清理临时文件
-cleanup() {
-    if [ -f /tmp/upgradable_pkgs.txt ]; then
-        rm /tmp/upgradable_pkgs.txt
-    fi
-}
-trap cleanup EXIT
-
-# 步骤 1: 更新包列表
-log "开始更新软件包列表..."
-if ! $cmd update >> "$LOG_FILE" 2>&1; then
-    log "\033[31m错误：更新包列表失败，请检查日志 $LOG_FILE\033[0m"
+# 检查系统更新
+echo -e "\n${BLUE}[$TimeStamp] 正在检查更新并更新包...${NC}"
+if ! apt-get update >> "$LOG_FILE" 2>&1; then
+    echo -e "\n${RED}错误：更新包列表失败，请检查日志文件：$LOG_FILE${NC}"
     exit 1
 fi
 
-# 步骤 2: 获取可升级包（更可靠的方式）
-log "检测可升级软件包..."
-if [ "$USE_APT" = "yes" ]; then
-    cmd=apt
-else
-    cmd=apt-get
-fi
-
-# 使用 apt list --upgradable 获取更清晰的输出
-$cmd list --upgradable 2>/dev/null | grep -v "^正在" | awk -F/ '{print \$1}' > /tmp/upgradable_pkgs.txt
-UPGRADE_INFO=$(cat /tmp/upgradable_pkgs.txt)
+# 获取可升级的包信息
+echo -e "\n${BLUE}[$TimeStamp] 获取可升级的包信息...${NC}"
+UPGRADE=$(apt-get upgrade --dry-run | awk '/^[^ ]/ {print $1}' | tail -n +2)
 
 if [ -z "$UPGRADE_INFO" ]; then
-    log "没有可用的更新。"
+    echo -e "\n${BLUE}[$TimeStamp] 检查结果：没有可用的更新。脚本结束。${NC}"
     exit 0
 else
-    log "检测到以下可升级包：\n$(cat /tmp/upgradable_pkgs.txt)"
+    echo -e "\n${GREEN}[$TimeStamp] 检测到可升级的软件包，正在开始升级...${NC}"
 fi
 
-# 步骤 3: 执行升级
-log "开始升级操作 ($UPGRADE_MODE)..."
-if ! $cmd $UPGRADE_MODE -y >> "$LOG_FILE" 2>&1; then
-    log "\033[31m错误：升级过程中出现依赖问题，请检查日志 $LOG_FILE\033[0m"
+# 询问用户是否确认升级
+read -p "[$TimeStamp] 即将执行升级，继续吗？(Y/n) " CONFIRM
+if [ "$CONFIRM" != "Y" ] && [ "$CONFIRM" != "y" ]; then
+    echo -e "\n${BLUE}[$TimeStamp] 用户取消，脚本结束。${NC}"
+    exit 0
+fi
+
+# 执行升级操作
+echo -e "\n${BLUE}[$TimeStamp] 开始升级...${NC}" | tee -a "$LOG_FILE"
+
+# 尝试升级
+if ! apt-get dist-upgrade -y >> "$LOG_FILE" 2>&1; then
+    echo -e "\n${RED}错误：升级过程中出现错误，尝试修复...${NC}" | tee -a "$LOG_FILE"
+    
+    # 尝试回滚
+    echo -e "\n尝试回滚到上一个状态..." | tee -a "$LOG_FILE"
+    if apt-get --rollback >> "$LOG_FILE" 2>&1; then
+        echo -e "\n${GREEN}回滚成功，系统已回到升级前的状态。${NC}" | tee -a "$LOG_FILE"
+    else
+        echo -e "\nRED}回滚失败！尝试修复配置问题..." | tee -a "$LOG_FILE"
+        # 手动修复配置
+        dpkg --configure -a >> "$LOG_FILE" 2>&1
+        if [ $? -eq 0 ]; then
+            echo -e "\n${GREEN}修复成功，请继续检查系统状态。${NC}" | tee -a "$LOG_FILE"
+        else
+            echo -e "\n${RED}无法修复配置问题，请手动检查！${NC}" | tee -a "$LOG"
+        fi
+    fi
+    
     exit 1
 fi
 
-# 步骤 4: 精确统计结果（兼容多语言环境）
-成功升级数=$(grep -oP "^\d+ packages? upgraded" "$LOG_FILE" | awk '{print \$1}')
-失败数=$(grep -ciE "无法安装|E: |W: 依赖问题" "$LOG_FILE")
-待升级数=$(wc -l < /tmp/upgradable_pkgs.txt)
+# 分析升级结果
+echo -e "\n${BLUE}[$TimeStamp] 分析升级结果...${NC}" | tee -a "$LOG_FILE"
 
-# 步骤 5: 生成报告
-log "生成升级报告..."
-echo -e "\n\033[34m=== 升级结果统计 ===\033[0m"
-echo -e "可升级包总数：\033[33m$待升级数\033[0m"
-echo -e "成功升级数：\033[32m$成功升级数\033[0m"
-echo -e "失败/警告数：\033[31m$失败数\033[0m"
+# 重新获取升级信息
+UPGRADE_INFO=$(apt-get upgrade --dry-run | awk '/^[^ ]/ {print $1}' | tail -n +2)
+upgrade_packages=$(echo "$UPGRADE_INFO" | wc -l)
+successful_upgrades=$(grep -o "升级了 [0-9]+"LOG_FILE" | awk '{sum += $2} END {print sum}')
+failed_upgrades=$(grep -E "无法安装|依赖问题" "$LOG_FILE" | wc -l)
 
-# 步骤 6: 安全删除确认
-if [ $失败数 -gt 0 ]; then
-    log "\033[31m警告：存在未解决的依赖或错误，建议手动检查！\033[0m"
-fi
+echo -e "\升级结果统计："
+echo -e "待升级包数：$upgrade_packages 个"
+echo -e "已成功升级包数：$successful_upgrades 个"
+echo -e "升级失败包数：$failed_upgrades 个"
 
-read -p "是否删除脚本和日志？(y/N) " DELETE
-DELETE=${DELETE:-N}  # 默认值为 N
+# 显示升级日志
+echo -e "\n完整的升级日志如下："
+cat "$LOG_FILE"
 
-if [[ $DELETE =~ [yY] ]]; then
-    log "正在删除脚本和日志..."
-    script_name=$(basename "\$0")
-    rm -f "$script_name" "$LOG_FILE"
+# 提示用户是否删除脚本和日志文件
+read -p "[$TimeStamp] 升级完成。是否删除此脚本和升级日志？(Y/n) " DELETE
+
+if [ "$DELETE" = "Y" ] || [ "$DELETE" = "y" ]; then
+    echo -e "\n${BLUE}[$TimeStamp] 删除脚本和日志文件...${NC}"
+    if rm "$0" && rm "$LOG_FILE"; then
+        echo -e "\n${GREEN}[$TimeStamp] 脚本和日志文件已删除。${NC}"
+    else
+        echo -e "\n${RED}错误：删除文件时出现问题。${NC}"
+    fi
 else
-    log "保留脚本和日志：$LOG_FILE"
+    echo -e "\n${BLUE}[$TimeStamp] 保留脚本和日志文件。${NC}"
 fi
 
-log "操作完成。建议执行 reboot 重启系统（如需内核更新）。"
+echo -e "\n${BLUE}[$TimeStamp] 脚本完成。${NC}"
 exit 0
