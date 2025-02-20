@@ -5,13 +5,7 @@ ROOT_DIR="/root"
 SCRIPT_NAME="aptup.sh"
 TIMESTAMP=$(date +%Y%m%d%H%M%S)
 LOG_FILE="${ROOT_DIR}/upgrade_${TIMESTAMP}.log"
-LOCK_TIMEOUT=300       # 锁等待超时时间（秒）
 RETRY_COUNT=3          # 命令重试次数
-LOCK_FILES=(           # 需要检测的锁文件
-    "/var/lib/dpkg/lock-frontend"
-    "/var/lib/dpkg/lock"
-    "/var/cache/apt/archives/lock"
-)
 
 # ================== 颜色定义 ==================
 RED='\033[0;31m'
@@ -37,75 +31,6 @@ status_msg() {
         error)   echo -e "${RED}✖ \$2${NC}" ;;
         proc)    echo -e "${CYAN}» \$2${NC}" ;;
     esac | tee -a "$LOG_FILE"
-}
-
-# 显示进程信息（仅使用 ps）
-show_process_info() {
-    local pid=\$1
-    # 获取父进程信息（处理空值和无效PID）
-    local ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | awk '{print \$1}')
-    if [ -n "$ppid" ] && [ "$ppid" -ne 0 ] 2>/dev/null; then
-        local parent_cmd=$(ps -o cmd= -p "$ppid" 2>/dev/null || echo '未知')
-        echo -e "父进程[$ppid]: $parent_cmd"
-    else
-        echo -e "父进程: 无"
-    fi
-
-    # 获取当前进程命令行
-    local current_cmd=$(ps -p "$pid" -o cmd= --no-headers 2>/dev/null || echo '无法获取')
-    echo -e "命令行: $current_cmd"
-}
-
-# 智能锁检测与处理
-check_dpkg_lock() {
-    local start_time=$(date +%s)
-    
-    while :; do
-        local locked=0
-        # 检测所有相关锁文件
-        for lock_file in "${LOCK_FILES[@]}"; do
-            # 检测实际占用进程
-            if lsof -t "$lock_file" >/dev/null; then
-                locked=1
-                local pids=($(lsof -t "$lock_file"))
-                local pid=${pids[0]}  # 取第一个PID
-                if [ -z "$pid" ]; then
-                    status_msg warn "检测到锁占用，但无法获取进程ID"
-                    continue
-                fi
-                status_msg warn "检测到锁占用：$lock_file"
-                status_msg info "占用进程PID: $pid"
-                show_process_info "$pid"
-                # 尝试修复未完成的dpkg配置
-                if pgrep -x "dpkg" >/dev/null; then
-                    status_msg info "尝试修复未完成的dpkg配置..."
-                    sudo dpkg --configure -a
-                fi
-            elif [ -e "$lock_file" ]; then
-                status_msg warn "发现残留锁文件：$lock_file"
-                if rm -f "$lock_file" 2>/dev/null; then
-                    status_msg success "已安全移除残留锁"
-                else
-                    status_msg error "无法移除锁文件，请手动处理"
-                    exit 1
-                fi
-            fi
-        done
-
-        # 超时处理
-        if [ $(($(date +%s) - start_time)) -gt $LOCK_TIMEOUT ]; then
-            status_msg error "等待锁超时（${LOCK_TIMEOUT}秒）"
-            echo -e "${YELLOW}建议操作：\n1. 运行修复命令：sudo dpkg --configure -a\n2. 终止占用进程：sudo kill -9 $(lsof -t /var/lib/dpkg/lock-frontend)\n3. 删除锁文件：sudo rm ${LOCK_FILES[@]}\n4. 重启系统${NC}" | tee -a "$LOG_FILE"
-            exit 1
-        fi
-
-        [ $locked -eq 0 ] && break
-        
-        # 指数退避等待
-        local wait_time=$(( (RANDOM % 10) + 5 ))
-        status_msg info "等待锁释放（剩余时间：$((LOCK_TIMEOUT - ($(date +%s) - start_time)))秒）"
-        sleep $wait_time
-    done
 }
 
 # 带重试的命令执行
@@ -166,9 +91,6 @@ compare_versions() {
 exec > >(tee -a "$LOG_FILE")
 exec 2>&1
 status_msg info "启动系统更新 (日志文件: $LOG_FILE)"
-
-# 锁检测
-check_dpkg_lock
 
 # 版本快照
 record_versions
@@ -236,7 +158,7 @@ compare_versions
 echo -e "\n${GREEN}=== 操作摘要 ==="
 echo -e "成功升级包数: ${SUCCESS_COUNT} 个"
 echo -e "遇到错误次数:    ${FAIL_COUNT} 次"
-echo -e "日志文件位置:    ${LOG_FILE}${NC}
+echo -e "日志文件位置:    ${LOG_FILE}${NC}"
 
 # 重启提示
 if [ -f "/var/run/reboot-required" ]; then
