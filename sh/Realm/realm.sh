@@ -150,7 +150,7 @@ install_realm(){
 	download  /etc/systemd/system/realm.service https://raw.githubusercontent.com/zhouh047/realm-oneclick-install/main/realm.service
  	systemctl daemon-reload
 	[ ! -d /usr/local/etc/realm/ ] && mkdir /usr/local/etc/realm/
-	download  /usr/local/etc/realm/config.toml https://raw.githubusercontent.com/zhouh047/realm-oneclick-install/main/config.toml
+	download  /usr/local/etc/realm/config.toml https://raw.githubusercontent.com/limy90/NFD-Bot/refs/heads/main/sh/Realm/config.toml
 	
 	echo "realm 2.7.0安装成功..."
 	[ -f /usr/bin/realm ] && echo -e "${green}installed${plain}: /usr/bin/realm"
